@@ -6,3 +6,7 @@ class ReportRequest(BaseModel):
 class ReportResponse(BaseModel):
     status: str
     report: str = None
+
+class TriggerReportResponse(BaseModel):
+    status: str
+    report_id: str
