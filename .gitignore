@@ -3,6 +3,9 @@
 __pycache__/
 *.so
 
+# Report files
+/Reports/
+
 # Environment variables
 .env
 
