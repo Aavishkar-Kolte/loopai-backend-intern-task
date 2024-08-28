@@ -1,27 +1,53 @@
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
-from .models import StoreStatus, BusinessHours, StoreTimezone
+from collections import defaultdict
+from .models import StoreStatus, StoreTimezone, BusinessHours
 import pytz
 import csv
 
 
 def generate_report(report_id: str, db: Session):
     report_file = f"{report_id}.csv"
+
+    # Fetch all store status data
+    status_data = db.query(StoreStatus).order_by(StoreStatus.store_id, StoreStatus.timestamp_utc).all()
+    
+    # Fetch all store timezones
+    timezones = {tz.store_id: tz.timezone_str for tz in db.query(StoreTimezone).all()}
+    
+    # Fetch all business hours
+    business_hours_data = defaultdict(list)
+    for bh in db.query(BusinessHours).all():
+        business_hours_data[bh.store_id].append((bh.day_of_week, bh.start_time_local, bh.end_time_local))
+
+    # Organize status data by store_id
+    store_status_dict = defaultdict(list)
+    for status in status_data:
+        store_status_dict[status.store_id].append(status)
+
+    # Process each store's data and write to CSV
     with open(report_file, mode='w', newline='') as file:
         writer = csv.writer(file)
-        writer.writerow(["store_id", "uptime_last_hour", "downtime_last_hour", "uptime_last_day", "downtime_last_day", "uptime_last_week", "downtime_last_week"])
+        writer.writerow([
+            "store_id", "uptime_last_hour", "downtime_last_hour", 
+            "uptime_last_day", "downtime_last_day", 
+            "uptime_last_week", "downtime_last_week"
+        ])
 
-        store_ids = db.query(StoreStatus.store_id).distinct().all()
-        for store_id_tuple in store_ids:
-            store_id = store_id_tuple[0]
-            result = calculate_uptime_downtime(store_id, db)
-            writer.writerow([result["store_id"], result["uptime_last_hour"], result["downtime_last_hour"], result["uptime_last_day"], result["downtime_last_day"], result["uptime_last_week"], result["downtime_last_week"]])
+        # Calculate report data for each store
+        for store_id, statuses in store_status_dict.items():
+            timezone_str = timezones.get(store_id, 'America/Chicago')  # Default timezone if not found
+            business_hours = business_hours_data.get(store_id, [(day, datetime.min.time(), datetime.max.time()) for day in range(7)])  # Default 24/7 if not found
 
-    reports[report_id] = report_file
+            result = calculate_uptime_downtime(store_id, statuses, business_hours, timezone_str)
+            writer.writerow([
+                result["store_id"], result["uptime_last_hour"], result["downtime_last_hour"],
+                result["uptime_last_day"], result["downtime_last_day"],
+                result["uptime_last_week"], result["downtime_last_week"]
+            ])
 
 
-
-def interpolate_uptime_downtime(store_id, status_data, business_hours, timezone_str):
+def interpolate_uptime_downtime(status_data, business_hours, timezone_str):
     timezone = pytz.timezone(timezone_str)
     uptime, downtime = timedelta(), timedelta()
 
@@ -30,7 +56,6 @@ def interpolate_uptime_downtime(store_id, status_data, business_hours, timezone_
         end_time = status_data[i + 1].timestamp_utc.astimezone(timezone)
         status = status_data[i].status
 
-        print(business_hours)
         for day, start, end in business_hours:
             if start_time.weekday() == day:
                 # Convert business start and end times to the current datetime
@@ -51,25 +76,11 @@ def interpolate_uptime_downtime(store_id, status_data, business_hours, timezone_
     return uptime.total_seconds() / 60, downtime.total_seconds() / 60
 
 
-
-def calculate_uptime_downtime(store_id: str, db: Session):
-    status_data = db.query(StoreStatus).filter(StoreStatus.store_id == store_id).order_by(StoreStatus.timestamp_utc).all()
-
-    # Query timezone information and use 'America/Chicago' as default if not found
-    timezone_record = db.query(StoreTimezone).filter(StoreTimezone.store_id == store_id).first()
-    timezone_str = timezone_record.timezone_str if timezone_record else 'America/Chicago'
-
-    # Query business hours and convert to tuples, otherwise use default 24/7
-    business_hours_data = db.query(BusinessHours).filter(BusinessHours.store_id == store_id).all()
-    if business_hours_data:
-        business_hours = [(bh.day_of_week, bh.start_time_local, bh.end_time_local) for bh in business_hours_data]
-    else:
-        business_hours = [(day, datetime.min.time(), datetime.max.time()) for day in range(7)]
-
+def calculate_uptime_downtime(store_id: str, status_data, business_hours, timezone_str):
     # Calculate uptime and downtime for the last hour, day, and week
-    uptime_last_hour, downtime_last_hour = interpolate_uptime_downtime(store_id, status_data[-2:], business_hours, timezone_str)
-    uptime_last_day, downtime_last_day = interpolate_uptime_downtime(store_id, status_data[-25:], business_hours, timezone_str)
-    uptime_last_week, downtime_last_week = interpolate_uptime_downtime(store_id, status_data[-169:], business_hours, timezone_str)
+    uptime_last_hour, downtime_last_hour = interpolate_uptime_downtime(status_data[-2:], business_hours, timezone_str)
+    uptime_last_day, downtime_last_day = interpolate_uptime_downtime(status_data[-25:], business_hours, timezone_str)
+    uptime_last_week, downtime_last_week = interpolate_uptime_downtime(status_data[-169:], business_hours, timezone_str)
 
     return {
         "store_id": store_id,
@@ -80,4 +91,3 @@ def calculate_uptime_downtime(store_id: str, db: Session):
         "uptime_last_week": uptime_last_week / 60,
         "downtime_last_week": downtime_last_week / 60,
     }
-
