@@ -8,7 +8,7 @@ import os
 
 
 def generate_report(report_id: str, db: Session, reports: dict):
-    report_dir = "reports"
+    report_dir = "../reports"
     os.makedirs(report_dir, exist_ok=True)
     report_file = os.path.join(report_dir, f"{report_id}.csv")
 
